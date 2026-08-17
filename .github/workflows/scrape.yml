@@ -1,0 +1,81 @@
+name: Scrape Portal Inmobiliario
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # 09:00 UTC ~ 05:00-06:00 hora Chile
+  workflow_dispatch:
+    inputs:
+      paginas:
+        description: "Páginas de resultados por combinación"
+        required: false
+        default: "3"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        comuna: [vina-del-mar, nunoa, providencia, la-reina]
+        tipo: [departamento, casa]
+        operacion: [venta, arriendo]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Scrapear ${{ matrix.comuna }}/${{ matrix.tipo }}/${{ matrix.operacion }}
+        run: |
+          python main.py \
+            --comuna ${{ matrix.comuna }} \
+            --tipo ${{ matrix.tipo }} \
+            --operacion ${{ matrix.operacion }} \
+            --navegador chrome --headless \
+            --paginas ${{ inputs.paginas || '3' }} \
+            --salida data_${{ matrix.comuna }}_${{ matrix.tipo }}_${{ matrix.operacion }}.csv
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data-${{ matrix.comuna }}-${{ matrix.tipo }}-${{ matrix.operacion }}
+          path: data_*.csv
+          retention-days: 7
+
+  aggregate:
+    needs: scrape
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: data-*
+          merge-multiple: true
+
+      - name: Escribir credenciales de service account
+        run: echo '${{ secrets.GCP_SA_KEY }}' > credentials.json
+
+      - name: Consolidar y subir a Sheets + BigQuery
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: credentials.json
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          BQ_DATASET: ${{ vars.BQ_DATASET }}
+        run: python main.py --agregar "data_*.csv" --sheets --bigquery
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data-consolidado
+          path: data_consolidado.csv
+          retention-days: 30
