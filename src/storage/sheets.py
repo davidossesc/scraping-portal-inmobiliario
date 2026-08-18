@@ -1,24 +1,31 @@
 """Upsert de propiedades a una Google Sheet (hoja maestra, capa de revisión humana).
 
-Requiere una service account de Google Cloud con la Sheets API habilitada y con
-el Sheet destino compartido con su email (permiso Editor). Variables de entorno:
-    GOOGLE_APPLICATION_CREDENTIALS  ruta al JSON de la service account
-    GOOGLE_SHEET_ID                 id de la spreadsheet (de su URL)
+Autentica vía Application Default Credentials (ADC) — no usa un JSON key de
+service account (la organización de GCP tiene bloqueada la creación de keys,
+así que en su lugar: local corre como tu propia cuenta vía
+`gcloud auth application-default login`; en GitHub Actions corre como la
+service account vía Workload Identity Federation. En ambos casos el Sheet debe
+estar compartido (Editor) con la identidad que esté autenticada.
+
+Variable de entorno:
+    GOOGLE_SHEET_ID   id de la spreadsheet (de su URL)
 """
 import os
 
 import gspread
+import google.auth
 import pandas as pd
 
 from config import COLUMNAS_SALIDA
 
 NOMBRE_HOJA = "propiedades"
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
 def _conectar():
-    ruta_creds = os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
+    credenciales, _ = google.auth.default(scopes=SCOPES)
     sheet_id = os.environ["GOOGLE_SHEET_ID"]
-    cliente = gspread.service_account(filename=ruta_creds)
+    cliente = gspread.authorize(credenciales)
     return cliente.open_by_key(sheet_id)
 
 

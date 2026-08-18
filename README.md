@@ -52,28 +52,54 @@ Windows; en GitHub Actions (Ubuntu) usa Chrome (`--navegador chrome`).
 
 ## Setup de Google Cloud (una vez)
 
+Esta organización de GCP tiene bloqueada la creación de JSON keys de service account
+(`iam.disableServiceAccountKeyCreation`), así que todo el pipeline autentica vía
+**Application Default Credentials (ADC)** sin keys: localmente como tu propia cuenta,
+en GitHub Actions como la service account vía **Workload Identity Federation (WIF)**.
+
 1. Crear un proyecto en [console.cloud.google.com](https://console.cloud.google.com).
 2. Habilitar **Google Sheets API** y **BigQuery API** (APIs & Services → Library).
-3. Crear una **Service Account** (IAM & Admin → Service Accounts) y generar una key JSON
-   (Keys → Add Key → JSON). Guardarla como `credentials.json` en la raíz del repo (está en
-   `.gitignore`, nunca se sube).
+3. Crear una **Service Account** (IAM & Admin → Service Accounts) — sin generar key.
 4. Crear una Google Sheet vacía y compartirla (botón Compartir) con el email de la service
    account (termina en `...gserviceaccount.com`), con permiso **Editor**.
-5. En el proyecto de GCP, dar a la service account los roles **BigQuery Data Editor** y
-   **BigQuery Job User** (IAM & Admin → IAM).
-6. Completar `.env` con `GOOGLE_SHEET_ID` (de la URL de la Sheet), `GCP_PROJECT_ID` y
-   `BQ_DATASET` (el dataset se crea solo en la primera carga, no hace falta crearlo a mano).
+5. En IAM & Admin → IAM, dar los roles **BigQuery Data Editor** y **BigQuery Job User**
+   tanto a la service account como a tu propia cuenta de Google (la usás para correr y
+   probar el pipeline en local).
+6. Completar `.env` con `GOOGLE_SHEET_ID`, `GCP_PROJECT_ID` y `BQ_DATASET`.
+7. Local: instalar el [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) y correr:
+   ```bash
+   gcloud auth login
+   gcloud auth application-default login
+   ```
+8. GitHub Actions: configurar Workload Identity Federation (una vez) para que el workflow
+   pueda actuar como la service account sin ningún secreto de larga duración:
+   ```bash
+   gcloud iam workload-identity-pools create "github-pool" --location="global" \
+     --display-name="GitHub Actions"
 
-### Secrets de GitHub Actions
+   gcloud iam workload-identity-pools providers create-oidc "github-provider" \
+     --location="global" --workload-identity-pool="github-pool" \
+     --issuer-uri="https://token.actions.githubusercontent.com" \
+     --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+     --attribute-condition="assertion.repository=='davidossesc/scraping-portal-inmobiliario'"
 
-En el repo, Settings → Secrets and variables → Actions:
+   gcloud iam service-accounts add-iam-policy-binding SA_EMAIL \
+     --role="roles/iam.workloadIdentityUser" \
+     --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/davidossesc/scraping-portal-inmobiliario"
+   ```
 
-| Nombre | Tipo | Valor |
-|---|---|---|
-| `GCP_SA_KEY` | Secret | contenido completo del JSON de la service account |
-| `GOOGLE_SHEET_ID` | Secret | id de la Google Sheet |
-| `GCP_PROJECT_ID` | Secret | id del proyecto de GCP |
-| `BQ_DATASET` | Variable | ej. `portal_inmobiliario` |
+### Variables de GitHub Actions
+
+En el repo, Settings → Secrets and variables → Actions → pestaña **Variables** (no hace
+falta ningún Secret — sin keys no hay nada de larga duración que guardar como secreto):
+
+| Nombre | Valor |
+|---|---|
+| `GOOGLE_SHEET_ID` | id de la Google Sheet |
+| `GCP_PROJECT_ID` | id del proyecto de GCP |
+| `BQ_DATASET` | ej. `portal_inmobiliario` |
+| `WIF_PROVIDER` | `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
+| `WIF_SERVICE_ACCOUNT` | email de la service account |
 
 ## Conectar Power BI
 

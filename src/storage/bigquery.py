@@ -5,8 +5,11 @@ Cada corrida escribe (WRITE_TRUNCATE) sobre la partición del día -> reintentar
 día es idempotente, no duplica filas. El histórico completo queda en la tabla para
 análisis de tendencia de precios.
 
+Autentica vía Application Default Credentials (ADC), sin JSON key: local corre
+como tu propia cuenta (`gcloud auth application-default login`), en GitHub
+Actions corre como la service account vía Workload Identity Federation.
+
 Variables de entorno:
-    GOOGLE_APPLICATION_CREDENTIALS  ruta al JSON de la service account
     GCP_PROJECT_ID
     BQ_DATASET   (ej. "portal_inmobiliario")
 """

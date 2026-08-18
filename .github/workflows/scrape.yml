@@ -49,6 +49,9 @@ jobs:
     needs: scrape
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # requerido por Workload Identity Federation, sin JSON keys
     steps:
       - uses: actions/checkout@v4
 
@@ -63,14 +66,16 @@ jobs:
           pattern: data-*
           merge-multiple: true
 
-      - name: Escribir credenciales de service account
-        run: echo '${{ secrets.GCP_SA_KEY }}' > credentials.json
+      - name: Autenticar a Google Cloud (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
       - name: Consolidar y subir a Sheets + BigQuery
         env:
-          GOOGLE_APPLICATION_CREDENTIALS: credentials.json
-          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GOOGLE_SHEET_ID: ${{ vars.GOOGLE_SHEET_ID }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           BQ_DATASET: ${{ vars.BQ_DATASET }}
         run: python main.py --agregar "data_*.csv" --sheets --bigquery
 
