@@ -63,13 +63,20 @@ en GitHub Actions como la service account vía **Workload Identity Federation (W
 4. Crear una Google Sheet vacía y compartirla (botón Compartir) con el email de la service
    account (termina en `...gserviceaccount.com`), con permiso **Editor**.
 5. En IAM & Admin → IAM, dar los roles **BigQuery Data Editor** y **BigQuery Job User**
-   tanto a la service account como a tu propia cuenta de Google (la usás para correr y
-   probar el pipeline en local).
-6. Completar `.env` con `GOOGLE_SHEET_ID`, `GCP_PROJECT_ID` y `BQ_DATASET`.
-7. Local: instalar el [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) y correr:
+   a la service account (tu propia cuenta ya cubre BigQuery si es Owner/Editor del proyecto).
+6. Completar `.env` con `GOOGLE_SHEET_ID`, `GCP_PROJECT_ID`, `BQ_DATASET` y
+   `GCP_IMPERSONATE_SERVICE_ACCOUNT` (email de la service account).
+7. Local: instalar el [Google Cloud SDK](https://cloud.google.com/sdk/docs/install), loguearte,
+   y darte a vos mismo permiso para impersonar la service account (Google bloquea el
+   consentimiento directo del scope de Sheets con el cliente OAuth de gcloud, así que Sheets
+   se accede impersonando — ver `src/storage/sheets.py`):
    ```bash
    gcloud auth login
    gcloud auth application-default login
+
+   gcloud iam service-accounts add-iam-policy-binding SA_EMAIL \
+     --member="user:TU_EMAIL@gmail.com" \
+     --role="roles/iam.serviceAccountTokenCreator"
    ```
 8. GitHub Actions: configurar Workload Identity Federation (una vez) para que el workflow
    pueda actuar como la service account sin ningún secreto de larga duración:
