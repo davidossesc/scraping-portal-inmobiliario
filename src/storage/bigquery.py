@@ -1,9 +1,21 @@
-"""Carga incremental a BigQuery: tabla nativa particionada por día de scraping + vista
-con el último snapshot por propiedad (fuente para Power BI).
+"""Carga a BigQuery con arquitectura medallón (Bronze → Silver → Gold).
 
-Cada corrida escribe (WRITE_TRUNCATE) sobre la partición del día -> reintentar el mismo
-día es idempotente, no duplica filas. El histórico completo queda en la tabla para
-análisis de tendencia de precios.
+Bronze  (portal_inmobiliario_bronze.propiedades_raw)
+    Tabla nativa particionada por día de scraping, tal cual la entrega el
+    scraper — sin transformar. Cada corrida escribe (WRITE_TRUNCATE) sobre la
+    partición del día -> reintentar el mismo día es idempotente, no duplica.
+    Es el único lugar donde se escriben datos; todo lo demás son vistas.
+
+Silver  (portal_inmobiliario_silver.propiedades_limpias)
+    Vista sobre Bronze: nombres de comuna legibles, UF/m² calculado, y
+    columnas booleanas que *marcan* outliers en vez de descartarlos
+    silenciosamente (superficie fuera de rango, dormitorios fuera de rango).
+
+Gold  (portal_inmobiliario_gold.*)
+    Vistas de consumo para Power BI, construidas sobre Silver:
+      - propiedades_actuales      último snapshot por listing_id (mapa/detalle)
+      - metricas_comuna           KPIs agregados por comuna/tipo/operación
+      - historico_precios_comuna  serie de tiempo por comuna/operación/día
 
 Autentica vía Application Default Credentials (ADC), sin JSON key: local corre
 como tu propia cuenta (`gcloud auth application-default login`), en GitHub
@@ -11,7 +23,8 @@ Actions corre como la service account vía Workload Identity Federation.
 
 Variables de entorno:
     GCP_PROJECT_ID
-    BQ_DATASET   (ej. "portal_inmobiliario")
+    BQ_DATASET   (ej. "portal_inmobiliario" — se le agregan los sufijos
+                 _bronze / _silver / _gold para cada capa)
 """
 import os
 from datetime import datetime, timezone
@@ -19,10 +32,13 @@ from datetime import datetime, timezone
 import pandas as pd
 from google.cloud import bigquery
 
-TABLA_RAW = "propiedades_raw"
-VISTA_ACTUAL = "vw_propiedades_actual"
+TABLA_BRONZE = "propiedades_raw"
+VISTA_SILVER = "propiedades_limpias"
+VISTA_GOLD_ACTUALES = "propiedades_actuales"
+VISTA_GOLD_METRICAS = "metricas_comuna"
+VISTA_GOLD_HISTORICO = "historico_precios_comuna"
 
-ESQUEMA = [
+ESQUEMA_BRONZE = [
     bigquery.SchemaField("listing_id", "STRING"),
     bigquery.SchemaField("titulo", "STRING"),
     bigquery.SchemaField("precio_valor", "FLOAT64"),
@@ -50,15 +66,30 @@ def _cliente() -> bigquery.Client:
     return bigquery.Client(project=os.environ["GCP_PROJECT_ID"])
 
 
-def _tabla_ref() -> str:
-    return f"{os.environ['GCP_PROJECT_ID']}.{os.environ['BQ_DATASET']}.{TABLA_RAW}"
+def _proyecto() -> str:
+    return os.environ["GCP_PROJECT_ID"]
 
 
-def _asegurar_dataset_y_tabla(cliente: bigquery.Client):
-    dataset_id = f"{os.environ['GCP_PROJECT_ID']}.{os.environ['BQ_DATASET']}"
-    cliente.create_dataset(dataset_id, exists_ok=True)
+def _dataset_bronze() -> str:
+    return f"{os.environ['BQ_DATASET']}_bronze"
 
-    tabla = bigquery.Table(_tabla_ref(), schema=ESQUEMA)
+
+def _dataset_silver() -> str:
+    return f"{os.environ['BQ_DATASET']}_silver"
+
+
+def _dataset_gold() -> str:
+    return f"{os.environ['BQ_DATASET']}_gold"
+
+
+def _tabla_bronze_ref() -> str:
+    return f"{_proyecto()}.{_dataset_bronze()}.{TABLA_BRONZE}"
+
+
+def _asegurar_dataset_y_tabla_bronze(cliente: bigquery.Client):
+    cliente.create_dataset(f"{_proyecto()}.{_dataset_bronze()}", exists_ok=True)
+
+    tabla = bigquery.Table(_tabla_bronze_ref(), schema=ESQUEMA_BRONZE)
     tabla.time_partitioning = bigquery.TimePartitioning(
         type_=bigquery.TimePartitioningType.DAY, field="fecha_scraping_dia"
     )
@@ -66,36 +97,118 @@ def _asegurar_dataset_y_tabla(cliente: bigquery.Client):
 
 
 def cargar_incremental(df: pd.DataFrame) -> int:
+    """Carga el DataFrame a Bronze (partición del día) y reconstruye Silver + Gold."""
     if df.empty:
         return 0
 
     cliente = _cliente()
-    _asegurar_dataset_y_tabla(cliente)
+    _asegurar_dataset_y_tabla_bronze(cliente)
 
     df = df.copy()
     dia = datetime.now(timezone.utc).date()
     df["fecha_scraping_dia"] = dia
 
-    destino = f"{_tabla_ref()}${dia.strftime('%Y%m%d')}"
+    destino = f"{_tabla_bronze_ref()}${dia.strftime('%Y%m%d')}"
     job_config = bigquery.LoadJobConfig(
-        schema=ESQUEMA,
+        schema=ESQUEMA_BRONZE,
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
     )
     job = cliente.load_table_from_dataframe(df, destino, job_config=job_config)
     job.result()
 
-    _actualizar_vista_actual(cliente)
+    construir_capas_silver_y_gold(cliente)
     return job.output_rows
 
 
-def _actualizar_vista_actual(cliente: bigquery.Client):
-    vista_ref = f"{os.environ['GCP_PROJECT_ID']}.{os.environ['BQ_DATASET']}.{VISTA_ACTUAL}"
+def construir_capas_silver_y_gold(cliente: bigquery.Client | None = None):
+    """(Re)crea las vistas Silver y Gold sobre Bronze. Idempotente y barato —
+    son solo definiciones de vista, no vuelve a mover datos."""
+    cliente = cliente or _cliente()
+    cliente.create_dataset(f"{_proyecto()}.{_dataset_silver()}", exists_ok=True)
+    cliente.create_dataset(f"{_proyecto()}.{_dataset_gold()}", exists_ok=True)
+
+    _crear_vista_silver(cliente)
+    _crear_vista_gold_actuales(cliente)
+    _crear_vista_gold_metricas(cliente)
+    _crear_vista_gold_historico(cliente)
+
+
+def _crear_vista_silver(cliente: bigquery.Client):
+    ref = f"{_proyecto()}.{_dataset_silver()}.{VISTA_SILVER}"
     sql = f"""
-    CREATE OR REPLACE VIEW `{vista_ref}` AS
+    CREATE OR REPLACE VIEW `{ref}` AS
+    SELECT
+        *,
+        CASE comuna
+            WHEN 'vina-del-mar' THEN 'Viña del Mar'
+            WHEN 'nunoa' THEN 'Ñuñoa'
+            WHEN 'providencia' THEN 'Providencia'
+            WHEN 'la-reina' THEN 'La Reina'
+            ELSE comuna
+        END AS comuna_nombre,
+        SAFE_DIVIDE(precio_valor, NULLIF(superficie_util_m2, 0)) AS precio_uf_m2,
+        (superficie_util_m2 IS NOT NULL AND (superficie_util_m2 <= 0 OR superficie_util_m2 > 1000)) AS es_outlier_superficie,
+        (dormitorios IS NOT NULL AND (dormitorios < 0 OR dormitorios > 15)) AS es_outlier_dormitorios,
+        (latitud IS NOT NULL AND longitud IS NOT NULL) AS tiene_coordenadas
+    FROM `{_tabla_bronze_ref()}`
+    WHERE listing_id IS NOT NULL
+    """
+    cliente.query(sql).result()
+
+
+def _vista_silver_ref() -> str:
+    return f"{_proyecto()}.{_dataset_silver()}.{VISTA_SILVER}"
+
+
+def _crear_vista_gold_actuales(cliente: bigquery.Client):
+    ref = f"{_proyecto()}.{_dataset_gold()}.{VISTA_GOLD_ACTUALES}"
+    sql = f"""
+    CREATE OR REPLACE VIEW `{ref}` AS
     SELECT * EXCEPT(rn) FROM (
         SELECT *, ROW_NUMBER() OVER (PARTITION BY listing_id ORDER BY fecha_scraping DESC) AS rn
-        FROM `{_tabla_ref()}`
+        FROM `{_vista_silver_ref()}`
     )
     WHERE rn = 1
+    """
+    cliente.query(sql).result()
+
+
+def _crear_vista_gold_metricas(cliente: bigquery.Client):
+    ref_gold_actuales = f"{_proyecto()}.{_dataset_gold()}.{VISTA_GOLD_ACTUALES}"
+    ref = f"{_proyecto()}.{_dataset_gold()}.{VISTA_GOLD_METRICAS}"
+    sql = f"""
+    CREATE OR REPLACE VIEW `{ref}` AS
+    SELECT
+        comuna,
+        comuna_nombre,
+        tipo_propiedad,
+        operacion,
+        COUNT(*) AS total_propiedades,
+        ROUND(AVG(precio_valor), 0) AS precio_promedio,
+        ROUND(AVG(IF(NOT es_outlier_superficie, precio_uf_m2, NULL)), 1) AS uf_m2_promedio,
+        ROUND(AVG(superficie_util_m2), 0) AS superficie_promedio,
+        ROUND(AVG(dormitorios), 1) AS dormitorios_promedio,
+        ROUND(AVG(banos), 1) AS banos_promedio
+    FROM `{ref_gold_actuales}`
+    WHERE precio_moneda = 'UF'
+    GROUP BY 1, 2, 3, 4
+    """
+    cliente.query(sql).result()
+
+
+def _crear_vista_gold_historico(cliente: bigquery.Client):
+    ref = f"{_proyecto()}.{_dataset_gold()}.{VISTA_GOLD_HISTORICO}"
+    sql = f"""
+    CREATE OR REPLACE VIEW `{ref}` AS
+    SELECT
+        fecha_scraping_dia,
+        comuna,
+        comuna_nombre,
+        operacion,
+        COUNT(*) AS total_propiedades,
+        ROUND(AVG(precio_valor), 0) AS precio_promedio
+    FROM `{_vista_silver_ref()}`
+    WHERE precio_moneda = 'UF' AND NOT es_outlier_superficie
+    GROUP BY 1, 2, 3, 4
     """
     cliente.query(sql).result()

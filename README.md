@@ -15,10 +15,36 @@ incremental a BigQuery para explotarlos en Power BI.
 2. GitHub Actions (`.github/workflows/scrape.yml`) corre las 16 combinaciones en paralelo
    (matrix) todos los días, y un job final las consolida, deduplica por `listing_id` y
    sube el resultado a Google Sheets y BigQuery.
-3. BigQuery guarda una tabla particionada por día (`propiedades_raw`, histórico completo
-   para análisis de tendencia de precios) y una vista `vw_propiedades_actual` con el
-   último snapshot de cada propiedad — esa vista es la fuente recomendada para el mapa en
-   Power BI.
+3. BigQuery organiza los datos en 3 capas (arquitectura medallón, ver abajo): Bronze
+   (tabla particionada, tal cual la entrega el scraper), Silver (limpieza) y Gold
+   (vistas listas para Power BI).
+
+## Arquitectura de datos en BigQuery (medallón)
+
+```
+Bronze   portal_inmobiliario_bronze.propiedades_raw
+         Tabla nativa particionada por fecha_scraping_dia. Carga con WRITE_TRUNCATE
+         por partición -> reintentar el mismo día es idempotente. Es la única tabla
+         donde se escriben datos; todo lo demás son vistas encima.
+              │
+              ▼
+Silver   portal_inmobiliario_silver.propiedades_limpias
+         Vista: nombres de comuna legibles, UF/m² calculado (precio_uf_m2), y
+         columnas booleanas que marcan outliers en vez de descartarlos
+         (es_outlier_superficie, es_outlier_dormitorios, tiene_coordenadas).
+              │
+              ▼
+Gold     portal_inmobiliario_gold.*
+         Vistas de consumo directo para Power BI:
+           - propiedades_actuales      último snapshot por listing_id (mapa/detalle)
+           - metricas_comuna           KPIs agregados por comuna/tipo/operación
+           - historico_precios_comuna  serie de tiempo por comuna/operación/día
+```
+
+Silver y Gold son **vistas**, no tablas materializadas — no hace falta ningún job de
+transformación aparte; se recalculan solas cada vez que se consultan, siempre reflejan
+el Bronze más reciente. `construir_capas_silver_y_gold()` en `src/storage/bigquery.py`
+solo (re)define esas vistas — es barato y se corre después de cada carga.
 
 ### Nota sobre la fecha de publicación
 
@@ -104,16 +130,22 @@ falta ningún Secret — sin keys no hay nada de larga duración que guardar com
 |---|---|
 | `GOOGLE_SHEET_ID` | id de la Google Sheet |
 | `GCP_PROJECT_ID` | id del proyecto de GCP |
-| `BQ_DATASET` | ej. `portal_inmobiliario` |
+| `BQ_DATASET` | ej. `portal_inmobiliario` (base — se le agregan `_bronze`/`_silver`/`_gold`) |
 | `WIF_PROVIDER` | `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
 | `WIF_SERVICE_ACCOUNT` | email de la service account |
 
 ## Conectar Power BI
 
 Power BI Desktop → Obtener datos → Google BigQuery (conector nativo) → autenticar con la
-cuenta de Google → seleccionar el proyecto/dataset → tabla `vw_propiedades_actual` para el
-mapa de propiedades actuales (usa `latitud`/`longitud` en un visual de mapa), y
-`propiedades_raw` para análisis de tendencia de precios en el tiempo.
+cuenta de Google → dataset **`portal_inmobiliario_gold`** (no Bronze/Silver — Power BI
+consume solo la capa Gold, ya curada):
+
+- `propiedades_actuales` — mapa (`latitud`/`longitud`) y tabla de detalle.
+- `metricas_comuna` — KPIs y gráficos de barra por comuna.
+- `historico_precios_comuna` — gráfico de tendencia de precios en el tiempo.
+
+El proyecto de Power BI (`00-Proyecto de prueba PBI/`) ya viene armado apuntando a estas
+3 vistas.
 
 ## Riesgo de bloqueo
 
