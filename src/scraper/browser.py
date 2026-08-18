@@ -5,6 +5,11 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+# Si el sitio muestra un challenge anti-bot que nunca termina de cargar, driver.get()
+# puede colgarse indefinidamente sin este límite (nos pasó en CI: un job quedó
+# "in_progress" más de 25 minutos en una sola página).
+PAGE_LOAD_TIMEOUT_SEG = 30
+
 
 def crear_driver(navegador: str = "edge", headless: bool = False):
     if navegador == "chrome":
@@ -18,9 +23,9 @@ def crear_driver(navegador: str = "edge", headless: bool = False):
         options.add_argument("--disable-dev-shm-usage")
         if headless:
             options.add_argument("--headless=new")
-        return webdriver.Chrome(options=options)
+        driver = webdriver.Chrome(options=options)
 
-    if navegador == "edge":
+    elif navegador == "edge":
         from selenium import webdriver
         from selenium.webdriver.edge.options import Options
 
@@ -29,6 +34,10 @@ def crear_driver(navegador: str = "edge", headless: bool = False):
         options.add_argument("--disable-blink-features=AutomationControlled")
         if headless:
             options.add_argument("--headless=new")
-        return webdriver.Edge(options=options)
+        driver = webdriver.Edge(options=options)
 
-    raise ValueError(f"Navegador no soportado: {navegador!r} (usa 'edge' o 'chrome')")
+    else:
+        raise ValueError(f"Navegador no soportado: {navegador!r} (usa 'edge' o 'chrome')")
+
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SEG)
+    return driver

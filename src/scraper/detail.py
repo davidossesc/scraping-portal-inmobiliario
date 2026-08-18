@@ -11,7 +11,21 @@ import time
 import random
 from datetime import date, timedelta
 
+from selenium.common.exceptions import TimeoutException
+
 from config import PAUSA_ENTRE_DETALLES_MIN_SEG, PAUSA_ENTRE_DETALLES_MAX_SEG
+
+CAMPOS_DETALLE_VACIOS = {
+    "barrio": None,
+    "dormitorios": None,
+    "banos": None,
+    "superficie_util_m2": None,
+    "superficie_total_m2": None,
+    "latitud": None,
+    "longitud": None,
+    "fecha_publicacion_texto": None,
+    "fecha_publicacion": None,
+}
 
 RE_LISTING_ID = re.compile(r"(MLC-?\d+)", re.I)
 RE_LATLONG = re.compile(
@@ -85,7 +99,11 @@ def _superficie_a_float(texto: str | None) -> float | None:
 
 
 def raspar_detalle(driver, link: str) -> dict:
-    driver.get(link)
+    try:
+        driver.get(link)
+    except TimeoutException:
+        print(f"Timeout cargando detalle, se salta: {link}")
+        return {"listing_id": _extraer_listing_id(link), **CAMPOS_DETALLE_VACIOS}
     time.sleep(random.uniform(PAUSA_ENTRE_DETALLES_MIN_SEG, PAUSA_ENTRE_DETALLES_MAX_SEG))
     html = driver.page_source
     hoy = date.today()

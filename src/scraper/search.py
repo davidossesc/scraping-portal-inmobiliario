@@ -2,12 +2,17 @@
 import time
 import random
 from bs4 import BeautifulSoup
+from selenium.common.exceptions import TimeoutException
 
 from config import construir_url_busqueda, ESPERA_MIN_SEG, ESPERA_MAX_SEG
 
 
 def raspar_pagina_listado(driver, url: str) -> list[dict]:
-    driver.get(url)
+    try:
+        driver.get(url)
+    except TimeoutException:
+        print(f"Timeout cargando página de listado, se salta: {url}")
+        return []
     time.sleep(random.uniform(ESPERA_MIN_SEG, ESPERA_MAX_SEG))
 
     soup = BeautifulSoup(driver.page_source, "html.parser")
