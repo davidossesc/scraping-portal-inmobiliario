@@ -47,6 +47,17 @@ COLUMNAS_SALIDA = [
     "link",
 ]
 
+COLUMNAS_NUMERICAS = [
+    "precio_valor",
+    "dormitorios",
+    "banos",
+    "superficie_util_m2",
+    "superficie_total_m2",
+    "latitud",
+    "longitud",
+]
+COLUMNAS_FECHA = ["fecha_publicacion", "fecha_scraping"]
+
 
 def construir_url_busqueda(comuna_slug: str, tipo: str, operacion: str, pagina: int = 1) -> str:
     base = f"{BASE_URL}/{operacion}/{tipo}/{comuna_slug}/_OrderId_BEGINS*DESC_NoIndex_True"

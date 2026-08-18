@@ -22,7 +22,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from config import COMUNAS, TIPOS_PROPIEDAD, OPERACIONES, PAGINAS_POR_COMBO_DEFAULT, COLUMNAS_SALIDA
+from config import (
+    COMUNAS,
+    TIPOS_PROPIEDAD,
+    OPERACIONES,
+    PAGINAS_POR_COMBO_DEFAULT,
+    COLUMNAS_SALIDA,
+    COLUMNAS_NUMERICAS,
+    COLUMNAS_FECHA,
+)
 from scraper.browser import crear_driver
 from scraper.pipeline import scrapear_combo
 
@@ -79,6 +87,16 @@ def modo_agregar(args):
     df = pd.concat((pd.read_csv(f) for f in archivos), ignore_index=True)
     df = df.drop_duplicates(subset=["listing_id"])
     df = df[COLUMNAS_SALIDA]
+
+    # Cada CSV lo escribe un job distinto; si alguno queda vacío (combo bloqueado)
+    # o con nulos, pandas puede inferir un dtype distinto por archivo (ej. columna
+    # numérica como texto). Se fuerza el tipo acá para que la carga a BigQuery no
+    # se caiga por un mismatch de esquema al juntar los 16 archivos.
+    for col in COLUMNAS_NUMERICAS:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in COLUMNAS_FECHA:
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+
     print(f"Total consolidado: {len(df)} propiedades únicas")
 
     salida = args.salida or "data_consolidado.csv"

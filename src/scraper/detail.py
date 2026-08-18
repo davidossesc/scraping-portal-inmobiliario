@@ -89,7 +89,7 @@ def _parsear_publicado_relativo(texto: str | None, hoy: date) -> date | None:
     return None
 
 
-def _superficie_a_float(texto: str | None) -> float | None:
+def _texto_a_float(texto: str | None) -> float | None:
     if not texto:
         return None
     m = re.search(r"[\d.,]+", texto)
@@ -118,10 +118,10 @@ def raspar_detalle(driver, link: str) -> dict:
     return {
         "listing_id": _extraer_listing_id(link),
         "barrio": _extraer_direccion(html),
-        "dormitorios": atributos.get("Dormitorios"),
-        "banos": atributos.get("Baños"),
-        "superficie_util_m2": _superficie_a_float(atributos.get("Superficie útil")),
-        "superficie_total_m2": _superficie_a_float(atributos.get("Superficie total")),
+        "dormitorios": _texto_a_float(atributos.get("Dormitorios")),
+        "banos": _texto_a_float(atributos.get("Baños")),
+        "superficie_util_m2": _texto_a_float(atributos.get("Superficie útil")),
+        "superficie_total_m2": _texto_a_float(atributos.get("Superficie total")),
         "latitud": latitud,
         "longitud": longitud,
         "fecha_publicacion_texto": publicado_texto,
