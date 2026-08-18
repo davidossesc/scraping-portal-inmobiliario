@@ -14,7 +14,7 @@ TIPOS_PROPIEDAD = ["departamento", "casa"]
 OPERACIONES = ["venta", "arriendo"]
 
 ITEMS_POR_PAGINA = 50
-PAGINAS_POR_COMBO_DEFAULT = 3
+PAGINAS_POR_COMBO_DEFAULT = 10
 
 BASE_URL = "https://www.portalinmobiliario.com"
 

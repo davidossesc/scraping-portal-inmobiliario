@@ -8,12 +8,12 @@ on:
       paginas:
         description: "Páginas de resultados por combinación"
         required: false
-        default: "3"
+        default: "10"
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -36,7 +36,7 @@ jobs:
             --tipo ${{ matrix.tipo }} \
             --operacion ${{ matrix.operacion }} \
             --navegador chrome --headless \
-            --paginas ${{ inputs.paginas || '3' }} \
+            --paginas ${{ inputs.paginas || '10' }} \
             --salida data_${{ matrix.comuna }}_${{ matrix.tipo }}_${{ matrix.operacion }}.csv
 
       - uses: actions/upload-artifact@v4
@@ -48,7 +48,7 @@ jobs:
   aggregate:
     needs: scrape
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write # requerido por Workload Identity Federation, sin JSON keys
