@@ -1,19 +1,24 @@
 """Upsert de propiedades a una Google Sheet (hoja maestra, capa de revisión humana).
 
 Autentica vía Application Default Credentials (ADC) — no usa un JSON key de
-service account (la organización de GCP tiene bloqueada la creación de keys,
-así que en su lugar: local corre como tu propia cuenta vía
-`gcloud auth application-default login`; en GitHub Actions corre como la
-service account vía Workload Identity Federation. En ambos casos el Sheet debe
-estar compartido (Editor) con la identidad que esté autenticada.
+service account (la organización de GCP tiene bloqueada la creación de keys).
+El scope de Sheets es "sensible" y Google bloquea el consentimiento directo
+para el cliente OAuth genérico de gcloud, así que localmente se impersona la
+service account (variable GCP_IMPERSONATE_SERVICE_ACCOUNT) usando tu propia
+identidad como fuente. En GitHub Actions corre directamente como la service
+account vía Workload Identity Federation, sin necesidad de impersonar en
+código (no seteés esa variable ahí). En ambos casos el Sheet debe estar
+compartido (Editor) con la identidad que quede autenticada.
 
-Variable de entorno:
-    GOOGLE_SHEET_ID   id de la spreadsheet (de su URL)
+Variables de entorno:
+    GOOGLE_SHEET_ID                    id de la spreadsheet (de su URL)
+    GCP_IMPERSONATE_SERVICE_ACCOUNT    (solo local) email de la service account a impersonar
 """
 import os
 
 import gspread
 import google.auth
+from google.auth import impersonated_credentials
 import pandas as pd
 
 from config import COLUMNAS_SALIDA
@@ -22,10 +27,22 @@ NOMBRE_HOJA = "propiedades"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
-def _conectar():
+def _credenciales():
+    sa_a_impersonar = os.environ.get("GCP_IMPERSONATE_SERVICE_ACCOUNT")
+    if sa_a_impersonar:
+        base, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        return impersonated_credentials.Credentials(
+            source_credentials=base,
+            target_principal=sa_a_impersonar,
+            target_scopes=SCOPES,
+        )
     credenciales, _ = google.auth.default(scopes=SCOPES)
+    return credenciales
+
+
+def _conectar():
     sheet_id = os.environ["GOOGLE_SHEET_ID"]
-    cliente = gspread.authorize(credenciales)
+    cliente = gspread.authorize(_credenciales())
     return cliente.open_by_key(sheet_id)
 
 
