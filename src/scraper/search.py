@@ -56,7 +56,18 @@ def raspar_combo(driver, comuna_slug: str, tipo: str, operacion: str, paginas: i
         url = construir_url_busqueda(comuna_slug, tipo, operacion, pagina)
         datos_pagina = raspar_pagina_listado(driver, url)
         if not datos_pagina:
-            break
+            if pagina == 1:
+                # una página 1 vacía casi nunca es "sin resultados" real (toda comuna
+                # grande tiene inventario); lo más probable es un bloqueo/interstitial
+                # transitorio, así que se reintenta una vez antes de rendirse.
+                print(f"Página 1 sin resultados para {comuna_slug}/{tipo}/{operacion}, reintentando...")
+                time.sleep(random.uniform(6.0, 10.0))
+                datos_pagina = raspar_pagina_listado(driver, url)
+                if not datos_pagina:
+                    print(f"ALERTA: {comuna_slug}/{tipo}/{operacion} sigue sin resultados tras reintento, posible bloqueo")
+                    break
+            else:
+                break
         resultados.extend(datos_pagina)
         time.sleep(random.uniform(2.0, 4.0))
     return resultados
